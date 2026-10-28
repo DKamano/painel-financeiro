@@ -1,0 +1,27 @@
+export const MONTHS=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+export const CATEGORIES=['Moradia','Alimentação','Transporte','Lazer','Viagens','Casa e compras','Pets','Saúde','Educação','Assinaturas','Renda','Outros'];
+export const SHEET_ID='1NCfcjOeABQNWiTRCbiu-Quti1cGklA70QD03p8cwZP0';
+export const SOURCES={Casa:{gid:547972813,name:'2025/2026'},Maina:{gid:111325137,name:'MAÍNA - gastos variáveis mensais'},Diogo:{gid:895284905,name:'DIOGO - Cópia de gastos variáveis mensais'}};
+export function money(value){if(typeof value==='number')return Number.isFinite(value)?value:null;let s=String(value??'').trim();if(!s)return null;if(/^\s*(?:R\$\s*)?-\s*$/.test(s))return 0;s=s.replace(/R\$|\s/g,'');if(!/^-?\d[\d.,]*$/.test(s))return null;if(s.includes(','))s=s.replace(/\./g,'').replace(',','.');const n=Number(s);return Number.isFinite(n)?n:null;}
+export function csv(text){if(/^\s*</.test(text))throw Error('O Google retornou uma página de acesso em vez dos dados.');const rows=[];let row=[],field='',quoted=false;for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){field+='"';i++;}else quoted=!quoted;}else if(c===','&&!quoted){row.push(field);field='';}else if((c==='\n'||c==='\r')&&!quoted){if(c==='\r'&&text[i+1]==='\n')i++;row.push(field);rows.push(row);row=[];field='';}else field+=c;}if(quoted)throw Error('CSV incompleto.');if(field||row.length){row.push(field);rows.push(row);}return rows;}
+export function category(name){const s=name.toLowerCase();if(/aluguel|água|agua|luz|gas cozinha|internet/.test(s))return 'Moradia';if(/mercado|vuon|imperatriz/.test(s))return 'Alimentação';if(/carro|gasolina|combust|ipva|bike/.test(s))return 'Transporte';if(/passag|airbnb|hotel|ibis/.test(s))return 'Viagens';if(/rolê|role|ingresso|zoo|alles|opeth/.test(s))return 'Lazer';if(/pet|ração/.test(s))return 'Pets';if(/fogão|balcão|porta|grama|amazon/.test(s))return 'Casa e compras';return 'Outros';}
+export function parseMain(rows){let year=null,active=false;const entries=[],issues=[],years=new Set(),totals={};for(let i=0;i<rows.length;i++){const row=rows[i],name=String(row[1]??'').trim(),title=name.match(/controle de gastos\s*(20\d{2})/i);if(title){year=Number(title[1]);years.add(year);active=false;continue;}if(!year)continue;if(name.toLowerCase()==='despesa'){active=true;continue;}if(/^total gasto por m[eê]s/i.test(name)){active=false;for(let m=0;m<12;m++)totals[`${year}-${String(m+1).padStart(2,'0')}`]=money(row[m+2]);continue;}const income=/^renda por m[eê]s/i.test(name);if(!active&&!income)continue;for(let m=0;m<12;m++){const period=`${year}-${String(m+1).padStart(2,'0')}`,raw=row[m+2],amount=money(raw),cell=`${String.fromCharCode(67+m)}${i+1}`;if(amount===null){if(String(raw??'').trim())issues.push({period,cell,value:String(raw)});continue;}if(!amount)continue;entries.push({id:`legacy-${cell}`,description:name||'Sem descrição',category:income?'Renda':category(name),type:income?'Receita':'Despesa',amount,period,date:'',owner:'Casa',status:'Registrado',payment:'',note:'',source:'Planilha original',cell,gid:SOURCES.Casa.gid});}}if(!years.size)throw Error('Não foram encontrados os blocos anuais da planilha.');return {entries,issues,years:[...years],totals};}
+export const cents=n=>Math.round(n*100);
+// Import only explicitly dated personal blocks. Household card details stay excluded.
+export function parsePersonal(rows,owner){
+  const entries=[],issues=[],gid=SOURCES[owner].gid;
+  const add=(r,col,name,period)=>{const amount=money(rows[r]?.[col]);if(amount===null||amount===0)return;entries.push({id:`personal-${owner}-${r}-${col}`,description:name,category:category(name),type:'Despesa',amount,period,date:'',owner,status:'Registrado',payment:'',note:'Competência do título do bloco pessoal.',source:`Aba ${owner}`,gid,cell:`${String.fromCharCode(65+col)}${r+1}`});};
+  if(owner==='Maina'){
+    for(let r=0;r<rows.length;r++){
+      const cash=String(rows[r]?.[9]||'').match(/^cash\s+(\d{1,2})\/(20\d{2})$/i);
+      if(cash){const period=`${cash[2]}-${cash[1].padStart(2,'0')}`;for(let j=r+1;j<rows.length;j++){const label=String(rows[j]?.[9]||'').trim();if(/^total|^cash/i.test(label))break;if(/^\d{1,2}\/\d{1,2}$/.test(label))add(j,10,String(rows[j]?.[11]||'Dinheiro — Maina'),period);}}
+      const extra=String(rows[r]?.[13]||'').match(/^outros (?:débitos|créditos)\s+(\d{1,2})\/(20\d{2})$/i);
+      if(extra){const period=`${extra[2]}-${extra[1].padStart(2,'0')}`;for(let j=r+1;j<rows.length;j++){const label=String(rows[j]?.[13]||'').trim();if(!label||/^outros|^total/i.test(label))break;add(j,14,label,period);}}
+    }
+    issues.push('Os detalhes de cartão já incluídos na casa não são somados novamente. Flash e quadros com datas ambíguas ficam disponíveis na consulta original.');
+  }else issues.push('O histórico antigo do Diogo foi desconsiderado. Esta visão reúne apenas os novos lançamentos.');
+  return {entries,issues};
+}
+export function sum(entries,type){return entries.filter(e=>!type||e.type===type).reduce((n,e)=>n+cents(e.amount),0)/100;}
+export function escapeHTML(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+export function ledgerRows(rows,gid){return rows.slice(1).filter(r=>r[0]).map((r,i)=>({id:r[0],date:r[1],period:r[2],type:r[3],description:r[4],category:r[5],owner:r[6],amount:money(r[7])??0,status:r[8],payment:r[9],note:r[10],source:'Lançamentos Painel',gid,cell:`A${i+2}`}));}
